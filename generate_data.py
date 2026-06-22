@@ -241,6 +241,8 @@ def generate(n_employees, n_years, outdir):
             survey_date += timedelta(days=90)
             q += 1
     dim_survey = pd.DataFrame(survey_rows)
+    # ensure SurveyDate is a proper date type for comparisons
+    dim_survey["SurveyDate"] = pd.to_datetime(dim_survey["SurveyDate"]).dt.date
 
     # ---- Attrition risk model (drives Fact_Employment + Dim_ExitInterview) ----
     # weighted logistic-ish score combining realistic drivers
@@ -282,6 +284,9 @@ def generate(n_employees, n_years, outdir):
     exit_id = 1
     fact_sk = 1
 
+    # ensure all date columns are proper Python date objects before comparisons
+    dim_date["FullDate"] = pd.to_datetime(dim_date["FullDate"]).dt.date
+    dim_employee["HireDate"] = pd.to_datetime(dim_employee["HireDate"]).dt.date
     date_lookup = dict(zip(dim_date["FullDate"], dim_date["DateID"]))
 
     for _, row in dim_employee.iterrows():
