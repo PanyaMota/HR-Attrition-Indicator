@@ -5,3 +5,6 @@ __pycache__/
 data/*.csv
 *.pbix.bak
 .ipynb_checkpoints/
+data/model.pkl
+data/model_features.pkl
+data/employee_risk_scores.csv

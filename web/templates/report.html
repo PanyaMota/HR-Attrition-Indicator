@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HR Attrition AI Report</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #f4f6f9;
+      color: #2d3748;
+      padding: 32px;
+      max-width: 860px;
+      margin: 0 auto;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      padding-bottom: 16px;
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .header h1 {
+      font-size: 1.3rem;
+      color: #1a202c;
+      font-weight: 700;
+    }
+
+    .header p {
+      font-size: 0.85rem;
+      color: #718096;
+      margin-top: 4px;
+    }
+
+    .risk-badge {
+      padding: 8px 20px;
+      border-radius: 20px;
+      font-weight: 700;
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .risk-High   { background: #fed7d7; color: #c53030; }
+    .risk-Medium { background: #fefcbf; color: #b7791f; }
+    .risk-Low    { background: #c6f6d5; color: #276749; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      border-top: 3px solid #667eea;
+    }
+
+    .card .label {
+      font-size: 0.72rem;
+      color: #718096;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    .card .value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: #1a202c;
+    }
+
+    .card .sub {
+      font-size: 0.75rem;
+      color: #a0aec0;
+      margin-top: 2px;
+    }
+
+    .flags {
+      background: white;
+      border-radius: 10px;
+      padding: 18px 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      margin-bottom: 24px;
+    }
+
+    .flags h3 {
+      font-size: 0.85rem;
+      color: #4a5568;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    .flag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .flag {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .flag-on  { background: #fed7d7; color: #c53030; }
+    .flag-off { background: #f0f4f8; color: #a0aec0; }
+
+    .actions {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .action-btn {
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: 2px solid transparent;
+      text-decoration: none;
+      transition: all 0.15s;
+    }
+
+    .action-btn.active {
+      background: #667eea;
+      color: white;
+    }
+
+    .action-btn:not(.active) {
+      background: white;
+      color: #667eea;
+      border-color: #667eea;
+    }
+
+    .action-btn:hover:not(.active) {
+      background: #ebf4ff;
+    }
+
+    .ai-output {
+      background: white;
+      border-radius: 10px;
+      padding: 24px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      margin-bottom: 24px;
+      border-left: 4px solid #667eea;
+    }
+
+    .ai-output h2 {
+      font-size: 1rem;
+      color: #4a5568;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ai-badge {
+      background: #ebf4ff;
+      color: #3182ce;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 8px;
+      font-weight: 600;
+    }
+
+    .ai-output p {
+      line-height: 1.75;
+      color: #2d3748;
+      font-size: 0.95rem;
+      white-space: pre-wrap;
+    }
+
+    .export-bar {
+      display: flex;
+      gap: 12px;
+    }
+
+    .export-btn {
+      padding: 9px 20px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      background: #2d3748;
+      color: white;
+    }
+
+    .export-btn:hover { background: #1a202c; }
+
+    .error-box {
+      background: #fff5f5;
+      border: 1px solid #feb2b2;
+      border-radius: 10px;
+      padding: 20px;
+      color: #c53030;
+    }
+
+    @media print {
+      body { background: white; padding: 0; }
+      .actions, .export-bar { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+{% if error %}
+  <div class="error-box">
+    <strong>Error:</strong> {{ error }}
+  </div>
+
+{% elif employee %}
+
+  <!-- Header -->
+  <div class="header">
+    <div>
+      <h1>{{ employee.FullName }} — AI Risk Report</h1>
+      <p>{{ employee.JobLevel }} · {{ employee.DepartmentName }} · {{ employee.Region }}</p>
+    </div>
+    <span class="risk-badge risk-{{ employee.risk_tier }}">
+      {{ employee.risk_tier }} Risk
+    </span>
+  </div>
+
+  <!-- KPI cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="label">Attrition Probability</div>
+      <div class="value">{{ "%.0f"|format(employee.attrition_probability * 100) }}%</div>
+      <div class="sub">ML model score</div>
+    </div>
+    <div class="card">
+      <div class="label">Engagement Score</div>
+      <div class="value">{{ employee.EngagementScore }}</div>
+      <div class="sub">out of 5.0</div>
+    </div>
+    <div class="card">
+      <div class="label">Tenure</div>
+      <div class="value">{{ employee.TenureMonths }}m</div>
+      <div class="sub">months in role</div>
+    </div>
+    <div class="card">
+      <div class="label">Pay Band Position</div>
+      <div class="value">
+        {% if employee.pay_band_position is not none %}
+          {{ "%.0f"|format(employee.pay_band_position * 100) }}%
+        {% else %}N/A{% endif %}
+      </div>
+      <div class="sub">0%=min, 100%=max</div>
+    </div>
+  </div>
+
+  <!-- Risk flags -->
+  <div class="flags">
+    <h3>Risk Flags</h3>
+    <div class="flag-list">
+      <span class="flag {% if employee.flag_low_engagement %}flag-on{% else %}flag-off{% endif %}">
+        Low Engagement
+      </span>
+      <span class="flag {% if employee.flag_high_overtime %}flag-on{% else %}flag-off{% endif %}">
+        High Overtime
+      </span>
+      <span class="flag {% if employee.flag_long_commute %}flag-on{% else %}flag-off{% endif %}">
+        Long Commute
+      </span>
+      <span class="flag {% if employee.flag_no_raise_1yr %}flag-on{% else %}flag-off{% endif %}">
+        No Raise &gt;1yr
+      </span>
+      <span class="flag {% if employee.flag_low_pto_use %}flag-on{% else %}flag-off{% endif %}">
+        Low PTO Use
+      </span>
+      <span class="flag {% if employee.flag_tenure_spike_1yr %}flag-on{% else %}flag-off{% endif %}">
+        1-Year Tenure Risk
+      </span>
+      <span class="flag {% if employee.flag_tenure_spike_4yr %}flag-on{% else %}flag-off{% endif %}">
+        4-Year Tenure Risk
+      </span>
+    </div>
+  </div>
+
+  <!-- Action buttons -->
+  <div class="actions">
+    <a class="action-btn {% if action == 'explain' %}active{% endif %}"
+       href="/report?employee_id={{ employee.EmployeeID }}&action=explain">
+      Explain Prediction
+    </a>
+    <a class="action-btn {% if action == 'retention' %}active{% endif %}"
+       href="/report?employee_id={{ employee.EmployeeID }}&action=retention">
+      Retention Plan
+    </a>
+    <a class="action-btn {% if action == 'summary' %}active{% endif %}"
+       href="/report?employee_id={{ employee.EmployeeID }}&action=summary">
+      Risk Profile Summary
+    </a>
+    <a class="action-btn {% if action == 'exit' %}active{% endif %}"
+       href="/report?employee_id={{ employee.EmployeeID }}&action=exit">
+      Exit Interview Summary
+    </a>
+  </div>
+
+  <!-- AI output -->
+  <div class="ai-output">
+    <h2>
+      {{ action_label }}
+      <span class="ai-badge">AI Generated</span>
+    </h2>
+    <p>{{ ai_output }}</p>
+  </div>
+
+  <!-- Export -->
+  <div class="export-bar">
+    <button class="export-btn" onclick="window.print()">
+      Export as PDF
+    </button>
+  </div>
+
+{% endif %}
+
+</body>
+</html>
