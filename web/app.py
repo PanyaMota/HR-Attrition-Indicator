@@ -1,27 +1,16 @@
 """
-HR Attrition Indicator — Flask AI Assistant
+HR Attrition Indicator - Flask AI Assistant (fixed)
 File: web/app.py
 
-One route. One page. Four focused AI actions.
-Triggered from Power BI via Web URL action button.
+One route, one page, four focused AI actions.
 
-GenAI: Groq API (free tier) with Llama-3 model.
-In production: swap for IBM watsonx or Azure OpenAI —
-the prompt engineering approach is model-agnostic.
+Setup (each new Git Bash session):
+    export GROQ_API_KEY="your-key"
+    export DB_PASSWORD="your-postgres-password"
 
-Setup:
-    1. Sign up free at https://console.groq.com
-    2. Create an API key
-    3. Run in terminal: export GROQ_API_KEY="your-key-here"
-    4. pip install flask groq sqlalchemy psycopg2-binary joblib pandas
-
-Usage:
-    cd web
-    python3 app.py
+Run:
+    cd web && python3 app.py
     Open: http://localhost:5000/report?employee_id=1&action=explain
-
-Power BI button URL:
-    http://localhost:5000/report?employee_id=[EmployeeID]&action=explain
 """
 
 import os
@@ -32,9 +21,6 @@ from flask import Flask, render_template, request
 from sqlalchemy import create_engine, text
 from groq import Groq
 
-# ----------------------------------------------------------------
-# Setup — add parent folder to path so genai/ is importable
-# ----------------------------------------------------------------
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from genai.prompts import (
     prompt_explain_prediction,
@@ -45,176 +31,172 @@ from genai.prompts import (
 
 app = Flask(__name__)
 
-# update password to match your PostgreSQL install
-DB_URL = "postgresql://postgres:postgresql25@localhost:5432/hr_attrition"
-engine = create_engine(DB_URL)
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+engine = create_engine(
+    f"postgresql://postgres:{DB_PASSWORD}@localhost:5432/hr_attrition"
+)
 
-# load trained model
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-model   = joblib.load(os.path.join(BASE_DIR, 'data', 'model.pkl'))
+model = joblib.load(os.path.join(BASE_DIR, 'data', 'model.pkl'))
 FEATURES = joblib.load(os.path.join(BASE_DIR, 'data', 'model_features.pkl'))
 
-# Groq client — reads GROQ_API_KEY from environment automatically
-groq_client = Groq()
+groq_client = Groq()  # reads GROQ_API_KEY from environment
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 VALID_ACTIONS = {"explain", "retention", "summary", "exit"}
 
+# LabelEncoder sorts classes alphabetically, so these match the notebook.
+ENCODERS = {
+    "JobLevel": {"Corporate": 0, "Frontline": 1, "Regional": 2,
+                 "Store Manager": 3, "Team Lead": 4},
+    "EmploymentType": {"Hourly": 0, "Salaried": 1},
+    "DeptTier": {"Corporate": 0, "Frontline": 1, "Mid": 2},
+    "Region": {"Midwest": 0, "Northeast": 1, "Southeast": 2,
+               "Southwest": 3, "West": 4},
+    "StoreFormat": {"Flagship": 0, "Mall": 1, "Outlet": 2, "Strip Mall": 3},
+}
 
-# ----------------------------------------------------------------
-# Helper functions
-# ----------------------------------------------------------------
-def get_employee_data(employee_id: int):
-    """Fetch employee record from vw_high_risk_employees view."""
+
+def get_employee_data(employee_id):
+    """Latest monthly snapshot for one employee, with the fields the report needs."""
     with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT * FROM vw_high_risk_employees
-                WHERE "EmployeeID" = :eid
-                LIMIT 1
-            """),
-            {"eid": employee_id}
-        )
-        row = result.mappings().fetchone()
-        return dict(row) if row else None
+        row = conn.execute(text("""
+            SELECT
+                f."EmployeeID", e."FullName", e."JobLevel", e."EmploymentType",
+                e."CommuteDistanceKM", dept."DepartmentName", dept."DeptTier",
+                s."StoreName", s."StoreFormat", s."Region",
+                f."TenureMonths", f."PerformanceRating", f."EngagementScore",
+                f."OvertimeHours", f."PTOHoursUsed", f."PTOHoursAvailable",
+                ROUND(
+                    COALESCE(f."HourlyRate" - c."PayBandMin",
+                             f."MonthlySalary" * 12 - c."PayBandMin")::decimal
+                    / NULLIF(c."PayBandMax" - c."PayBandMin", 0), 2
+                ) AS pay_band_position,
+                (CURRENT_DATE - c."EffectiveDate"::date) AS days_since_last_raise
+            FROM "Fact_Employment" f
+            JOIN "Dim_Employee"   e    ON f."EmployeeID"   = e."EmployeeID"
+            JOIN "Dim_Department" dept ON f."DepartmentID" = dept."DepartmentID"
+            JOIN "Dim_Store"      s    ON f."StoreID"      = s."StoreID"
+            JOIN "Dim_Compensation" c  ON e."EmployeeID"   = c."EmployeeID"
+                                      AND c."IsCurrent"    = TRUE
+            WHERE f."EmployeeID" = :eid
+            ORDER BY f."SnapshotDateID" DESC
+            LIMIT 1
+        """), {"eid": employee_id}).mappings().fetchone()
+    if not row:
+        return None
+    emp = {k: (float(v) if hasattr(v, "as_tuple") else v) for k, v in dict(row).items()}
+    return emp
 
 
-def get_exit_comments(department: str):
-    """Fetch exit interview free-text for a department."""
+def get_exit_comments(department):
     with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT ei."ExitInterviewText"
-                FROM "Dim_ExitInterview" ei
-                JOIN "Dim_Employee" e  ON ei."EmployeeID" = e."EmployeeID"
-                JOIN "Dim_Department" d ON e."DepartmentID" = d."DepartmentID"
-                WHERE d."DepartmentName" = :dept
-                  AND ei."ExitInterviewText" IS NOT NULL
-                ORDER BY ei."ExitDate" DESC
-                LIMIT 20
-            """),
-            {"dept": department}
-        )
-        return [row[0] for row in result.fetchall()]
+        result = conn.execute(text("""
+            SELECT ei."ExitInterviewText"
+            FROM "Dim_ExitInterview" ei
+            JOIN "Dim_Employee"   e ON ei."EmployeeID" = e."EmployeeID"
+            JOIN "Dim_Department" d ON e."DepartmentID" = d."DepartmentID"
+            WHERE d."DepartmentName" = :dept
+              AND ei."ExitInterviewText" IS NOT NULL
+            ORDER BY ei."ExitDate" DESC
+            LIMIT 20
+        """), {"dept": department})
+        return [r[0] for r in result.fetchall()]
 
 
-def get_risk_score(employee: dict) -> float:
-    """Run ML model prediction for this employee."""
+def get_risk_score(emp):
     row = {
-        'TenureMonths':          employee.get('TenureMonths', 0),
-        'PerformanceRating':     employee.get('PerformanceRating', 3),
-        'EngagementScore':       employee.get('EngagementScore', 3.5),
-        'OvertimeHours':         employee.get('OvertimeHours', 0),
-        'PTOHoursUsed':          employee.get('PTOHoursUsed', 0),
-        'CommuteDistanceKM':     employee.get('CommuteDistanceKM', 5),
-        'pay_band_position':     employee.get('pay_band_position') or 0.5,
-        'months_since_last_raise': (employee.get('days_since_last_raise') or 0) / 30,
-        'JobLevel_encoded':      hash(str(employee.get('JobLevel'))) % 5,
-        'EmploymentType_encoded': 0 if employee.get('EmploymentType') == 'Hourly' else 1,
-        'DeptTier_encoded':      hash(str(employee.get('DeptTier'))) % 3,
-        'Region_encoded':        hash(str(employee.get('Region'))) % 5,
-        'StoreFormat_encoded':   hash(str(employee.get('StoreFormat'))) % 4,
+        'TenureMonths': emp['TenureMonths'],
+        'PerformanceRating': emp['PerformanceRating'],
+        'EngagementScore': emp['EngagementScore'],
+        'OvertimeHours': emp['OvertimeHours'],
+        'PTOHoursUsed': emp['PTOHoursUsed'],
+        'CommuteDistanceKM': emp['CommuteDistanceKM'],
+        'pay_band_position': emp['pay_band_position'] if emp['pay_band_position'] is not None else 0.5,
+        'months_since_last_raise': (emp['days_since_last_raise'] or 0) / 30,
+        'JobLevel_encoded': ENCODERS['JobLevel'].get(emp['JobLevel'], 0),
+        'EmploymentType_encoded': ENCODERS['EmploymentType'].get(emp['EmploymentType'], 0),
+        'DeptTier_encoded': ENCODERS['DeptTier'].get(emp['DeptTier'], 0),
+        'Region_encoded': ENCODERS['Region'].get(emp['Region'], 0),
+        'StoreFormat_encoded': ENCODERS['StoreFormat'].get(emp['StoreFormat'], 0),
     }
-    df_row = pd.DataFrame([row])[FEATURES]
-    return float(model.predict_proba(df_row)[0][1])
+    return float(model.predict_proba(pd.DataFrame([row])[FEATURES])[0][1])
 
 
-def call_llm(prompt: str) -> str:
-    """Call Groq API with Llama-3, return text response."""
+def add_flags_and_tier(emp):
+    emp['flag_low_engagement'] = int(emp['EngagementScore'] < 3.0)
+    emp['flag_high_overtime'] = int(emp['OvertimeHours'] > 15)
+    emp['flag_long_commute'] = int(emp['CommuteDistanceKM'] > 25)
+    emp['flag_no_raise_1yr'] = int((emp['days_since_last_raise'] or 0) > 365)
+    emp['flag_low_pto_use'] = int(emp['PTOHoursUsed'] < 8)
+    emp['flag_tenure_spike_1yr'] = int(10 <= emp['TenureMonths'] <= 14)
+    emp['flag_tenure_spike_4yr'] = int(34 <= emp['TenureMonths'] <= 50)
+    p = emp['attrition_probability']
+    emp['risk_tier'] = 'High' if p >= 0.6 else 'Medium' if p >= 0.3 else 'Low'
+
+
+def call_llm(prompt):
     response = groq_client.chat.completions.create(
-        model="llama3-8b-8192",   # free, fast, capable enough for HR reports
+        model=GROQ_MODEL,
         messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a professional HR analytics assistant. "
-                    "Give clear, empathetic, actionable responses. "
-                    "Be concise and do not use unnecessary jargon."
-                )
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "system", "content":
+                "You are a professional HR analytics assistant. Give clear, "
+                "empathetic, actionable responses. Be concise, avoid jargon."},
+            {"role": "user", "content": prompt},
         ],
         max_tokens=600,
-        temperature=0.4,   # lower = more consistent, less creative
+        temperature=0.4,
     )
     return response.choices[0].message.content
 
 
-# ----------------------------------------------------------------
-# Routes
-# ----------------------------------------------------------------
 @app.route('/report')
 def report():
     employee_id = request.args.get('employee_id', type=int)
-    action      = request.args.get('action', 'explain')
+    action = request.args.get('action', 'explain')
 
     if not employee_id:
         return render_template('report.html', error="No employee ID provided.")
     if action not in VALID_ACTIONS:
         action = 'explain'
 
-    # fetch employee record
     employee = get_employee_data(employee_id)
     if not employee:
-        return render_template(
-            'report.html',
-            error=f"Employee ID {employee_id} not found or is no longer active."
-        )
+        return render_template('report.html',
+                               error=f"Employee ID {employee_id} not found.")
 
-    # add ML risk score
     employee['attrition_probability'] = get_risk_score(employee)
-    employee['days_since_last_raise']  = employee.get('days_since_last_raise') or 0
+    add_flags_and_tier(employee)
 
-    # select prompt
     if action == 'explain':
-        prompt       = prompt_explain_prediction(employee)
-        action_label = "Prediction Explanation"
+        prompt, label = prompt_explain_prediction(employee), "Prediction Explanation"
     elif action == 'retention':
-        prompt       = prompt_retention_plan(employee)
-        action_label = "Retention Action Plan"
+        prompt, label = prompt_retention_plan(employee), "Retention Action Plan"
     elif action == 'summary':
-        prompt       = prompt_risk_profile_summary(employee)
-        action_label = "Risk Profile Summary"
-    elif action == 'exit':
-        comments     = get_exit_comments(employee.get('DepartmentName', ''))
-        prompt       = prompt_exit_interview_summary(
-                           comments, employee.get('DepartmentName', 'Unknown'))
-        action_label = "Exit Interview Summary"
+        prompt, label = prompt_risk_profile_summary(employee), "Risk Profile Summary"
+    else:
+        dept = employee['DepartmentName']
+        prompt = prompt_exit_interview_summary(get_exit_comments(dept), dept)
+        label = "Exit Interview Summary"
 
-    # call LLM
-    ai_output = call_llm(prompt)
+    try:
+        ai_output = call_llm(prompt)
+    except Exception as exc:
+        ai_output = f"AI service error: {exc}"
 
-    return render_template(
-        'report.html',
-        employee=employee,
-        action=action,
-        action_label=action_label,
-        ai_output=ai_output,
-    )
+    return render_template('report.html', employee=employee, action=action,
+                           action_label=label, ai_output=ai_output)
 
 
 @app.route('/')
 def index():
-    return """
-    <h2 style="font-family:Segoe UI;padding:30px">
-        HR Attrition AI Assistant
-    </h2>
-    <p style="font-family:Segoe UI;padding:0 30px">
-        Open from Power BI or test directly:
-    </p>
-    <ul style="font-family:Segoe UI;padding:10px 50px;line-height:2">
-      <li><a href="/report?employee_id=1&action=explain">
-          Explain prediction — Employee 1</a></li>
-      <li><a href="/report?employee_id=1&action=retention">
-          Retention plan — Employee 1</a></li>
-      <li><a href="/report?employee_id=1&action=summary">
-          Risk profile summary — Employee 1</a></li>
-      <li><a href="/report?employee_id=1&action=exit">
-          Exit interview summary</a></li>
-    </ul>
-    """
+    return ('<h2 style="font-family:Segoe UI;padding:30px">HR Attrition AI Assistant</h2>'
+            '<ul style="font-family:Segoe UI;line-height:2">'
+            '<li><a href="/report?employee_id=1&action=explain">Explain - Employee 1</a></li>'
+            '<li><a href="/report?employee_id=1&action=retention">Retention plan - Employee 1</a></li>'
+            '<li><a href="/report?employee_id=1&action=summary">Risk summary - Employee 1</a></li>'
+            '<li><a href="/report?employee_id=1&action=exit">Exit summary - Employee 1</a></li>'
+            '</ul>')
 
 
 if __name__ == '__main__':
