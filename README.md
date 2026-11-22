@@ -1,4 +1,4 @@
-# HR Attrition Indicator
+# HR Attrition Indicator - Status: in progress – currently building the model and testing features
 
 A predictive and generative-AI decision-support prototype that flags employees at risk of leaving and separates **regretted attrition** (high performers leaving voluntarily) from healthy turnover, so HR and managers can act weeks before an exit instead of days after.
 
