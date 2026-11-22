@@ -14,7 +14,8 @@ import os
 # -----------------------------------------------------------------------
 # Connection — update password to match your PostgreSQL install
 # -----------------------------------------------------------------------
-DB_URL = "postgresql://postgres:postgresql25@localhost:5432/hr_attrition"
+import os
+DB_URL = f"postgresql://postgres:{os.environ['DB_PASSWORD']}@localhost:5432/hr_attrition"
 DATA_DIR = "data"
 
 engine = create_engine(DB_URL)
